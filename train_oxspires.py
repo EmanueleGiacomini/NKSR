@@ -19,15 +19,23 @@ if __name__ == "__main__":
                         default=50.0)
     parser.add_argument("-o", "--output-file", type=str,
                         help="Output mesh file", required=False, default=None)
+    parser.add_argument("--use-pcd",
+                        default=False, action="store_true")
 
     args = parser.parse_args()
     voxel_size = args.voxel_size
     chunk_size = args.chunk_size
     output_filename = args.output_file
+    use_pcd = args.use_pcd
 
     input_dir_base = Path(args.input_dir)
-    input_cloud_dir = input_dir_base / "velodyne"
-    input_cloud_files = sorted(list(input_cloud_dir.glob("*.bin")))
+    if use_pcd:
+        print(f"Reading PCD files in {input_dir_base / 'pcd'}")
+        input_cloud_dir = input_dir_base / "pcd"
+        input_cloud_files = sorted(list(input_cloud_dir.glob("*.pcd")))
+    else:
+        input_cloud_dir = input_dir_base / "velodyne"
+        input_cloud_files = sorted(list(input_cloud_dir.glob("*.bin")))
     print(f"Found {len(input_cloud_files)} clouds to process.")
 
     traj_file = input_dir_base / "poses.txt"
@@ -54,20 +62,32 @@ if __name__ == "__main__":
 
     cloud_np = None
     poses_np = None
+    cloud_list = []
+    poses_list = []
     for i in tqdm(range(len(input_cloud_files))):
-        cloud_partial_np = np.fromfile(
-            input_cloud_files[i], "<f4").reshape(-1, 4)[..., :3]
+        if use_pcd:
+            cloud_partial_pcd = o3d.io.read_point_cloud(
+                str(input_cloud_files[i]))
+            cloud_partial_np = np.asarray(cloud_partial_pcd.points)
+        else:
+            cloud_partial_np = np.fromfile(
+                input_cloud_files[i], "<f4").reshape(-1, 4)[..., :3]
         pose = sensor_poses[i]
         cloud_partial_np = cloud_partial_np @ pose[:3, :3].T + pose[:3, -1]
         # generate corresponding pose vect
         pose_partial = np.tile(
             sensor_poses[i][:3, -1], (cloud_partial_np.shape[0], 1))
-        if cloud_np is None:
-            cloud_np = cloud_partial_np.copy()
-            poses_np = pose_partial.copy()
-        else:
-            cloud_np = np.vstack([cloud_np, cloud_partial_np])
-            poses_np = np.vstack([poses_np, pose_partial])
+        cloud_list.append(cloud_partial_np)
+        poses_list.append(pose_partial)
+        # if cloud_np is None:
+        #     cloud_np = cloud_partial_np.copy()
+        #     poses_np = pose_partial.copy()
+        # else:
+        #     cloud_np = np.vstack([cloud_np, cloud_partial_np])
+        #     poses_np = np.vstack([poses_np, pose_partial])
+    cloud_np = np.vstack(cloud_list)
+    poses_np = np.vstack(poses_list)
+    print(cloud_np.shape)
 
     device = torch.device("cuda:0")
     cloud = torch.from_numpy(cloud_np).float().to(device)
